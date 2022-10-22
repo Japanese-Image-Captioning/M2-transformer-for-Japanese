@@ -1,3 +1,4 @@
+import json
 import os
 import numpy as np
 import itertools
@@ -6,7 +7,7 @@ import torch
 from .example import Example
 from .utils import nostdout
 from pycocotools.coco import COCO as pyCOCO
-
+from tqdm import tqdm
 
 class Dataset(object):
     def __init__(self, examples, fields):
@@ -28,6 +29,10 @@ class Dataset(object):
                 else:
                     tensors.append(tensor)
 
+            bl, fl = len(batch), len(self.fields.values())
+            if fl < bl:
+                tensors.extend(batch[fl:])
+            
             if len(tensors) > 1:
                 return tensors
             else:
@@ -41,8 +46,11 @@ class Dataset(object):
         for field_name, field in self.fields.items():
             data.append(field.preprocess(getattr(example, field_name)))
 
+        if hasattr(example, "image_id"):
+            data.append(getattr(example,"image_id"))
         if len(data) == 1:
             data = data[0]
+
         return data
 
     def __len__(self):
@@ -102,7 +110,7 @@ class DictionaryDataset(Dataset):
         key_dict = dict()
         value_examples = []
 
-        for i, e in enumerate(examples):
+        for i, e in enumerate(tqdm(examples)):
             key_example = Example.fromdict({k: getattr(e, k) for k in key_fields})
             value_example = Example.fromdict({v: getattr(e, v) for v in value_fields})
             if key_example not in key_dict:
@@ -118,14 +126,15 @@ class DictionaryDataset(Dataset):
 
     def collate_fn(self):
         def collate(batch):
-            key_batch, value_batch = list(zip(*batch))
+            key_batch, value_batch, img_ids = list(zip(*batch))
             key_tensors = self.key_dataset.collate_fn()(key_batch)
             value_tensors = self.value_dataset.collate_fn()(value_batch)
-            return key_tensors, value_tensors
+            return key_tensors, value_tensors, img_ids
         return collate
 
     def __getitem__(self, i):
-        return self.key_dataset[i], self.value_dataset[i]
+        img_id = getattr(self.examples[i],"image_id")
+        return self.key_dataset[i], self.value_dataset[i], img_id
 
     def __len__(self):
         return len(self.key_dataset)
@@ -199,10 +208,11 @@ class COCO(PairedDataset):
             'cap': (roots['train']['cap'], roots['val']['cap'])
         }
 
+        id_root = None
         if id_root is not None:
             ids = {}
-            ids['train'] = np.load(os.path.join(id_root, 'coco_train_ids.npy'))
-            ids['val'] = np.load(os.path.join(id_root, 'coco_dev_ids.npy'))
+            ids['train'] = np.load(os.path.join(id_root, 'coco_train_ids.npy')) # memo: splitされたann_idの羅列
+            ids['val'] = np.load(os.path.join(id_root, 'coco_dev_ids.npy')) # npyを作る代わりに, get_samples内で直接idsを選別するように
             if cut_validation:
                 ids['val'] = ids['val'][:5000]
             ids['test'] = np.load(os.path.join(id_root, 'coco_test_ids.npy'))
@@ -216,10 +226,14 @@ class COCO(PairedDataset):
         else:
             ids = None
 
-        with nostdout():
-            self.train_examples, self.val_examples, self.test_examples = self.get_samples(roots, ids)
+        # with nostdout():
+        self.train_examples, self.val_examples, self.test_examples = self.get_samples(roots, ids)
         examples = self.train_examples + self.val_examples + self.test_examples
+        print(f">>> train: {len(self.train_examples)}")
+        print(f">>> val: {len(self.val_examples)}")
+        print(f">>> test: {len(self.test_examples)}")
         super(COCO, self).__init__(examples, {'image': image_field, 'text': text_field})
+
 
     @property
     def splits(self):
@@ -229,21 +243,40 @@ class COCO(PairedDataset):
         return train_split, val_split, test_split
 
     @classmethod
-    def get_samples(cls, roots, ids_dataset=None):
+    def get_samples(cls, roots, ids_dataset):
         train_samples = []
         val_samples = []
         test_samples = []
 
         for split in ['train', 'val', 'test']:
+            filename = "stair_captions_v1.2_train_tokenized.json" if split == "train" else "stair_captions_v1.2_val_tokenized.json"
+            path = os.path.join("STAIR-captions", filename)
+            with open(path,encoding='utf-8') as f:
+                data = json.load(f)
+
+            annotations = data["annotations"]
+            L = len(annotations)
+            if split == "val":
+                annotations = annotations[:L//2]
+            elif split == "test":
+                annotations = annotations[L//2:]
+
+            stair_captions = {}
+            for anno in annotations:
+                img_id = anno["image_id"]
+                stair_captions.setdefault(img_id,[])
+                stair_captions[img_id].append(anno["tokenized_caption"])
+
             if isinstance(roots[split]['cap'], tuple):
                 coco_dataset = (pyCOCO(roots[split]['cap'][0]), pyCOCO(roots[split]['cap'][1]))
                 root = roots[split]['img']
+                assert False
             else:
                 coco_dataset = (pyCOCO(roots[split]['cap']),)
                 root = (roots[split]['img'],)
 
             if ids_dataset is None:
-                ids = list(coco_dataset.anns.keys())
+                ids = list(coco_dataset[0].anns.keys())
             else:
                 ids = ids_dataset[split]
 
@@ -253,7 +286,7 @@ class COCO(PairedDataset):
             else:
                 bp = len(ids)
 
-            for index in range(len(ids)):
+            for index in tqdm(range(len(ids))):
                 if index < bp:
                     coco = coco_dataset[0]
                     img_root = root[0]
@@ -264,9 +297,14 @@ class COCO(PairedDataset):
                 ann_id = ids[index]
                 caption = coco.anns[ann_id]['caption']
                 img_id = coco.anns[ann_id]['image_id']
+                if img_id not in stair_captions:
+                    continue
+                elif len(stair_captions[img_id]) == 0:
+                    continue
+                
+                caption = stair_captions[img_id].pop()
                 filename = coco.loadImgs(img_id)[0]['file_name']
-
-                example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': caption})
+                example = Example.fromdict({'image': os.path.join(img_root, filename), 'text': caption, "image_id" : img_id})
 
                 if split == 'train':
                     train_samples.append(example)

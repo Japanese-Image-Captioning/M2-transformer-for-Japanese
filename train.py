@@ -1,3 +1,4 @@
+import json
 import random
 from data import ImageDetectionsField, TextField, RawField
 from data import COCO, DataLoader
@@ -26,7 +27,7 @@ def evaluate_loss(model, dataloader, loss_fn, text_field):
     running_loss = .0
     with tqdm(desc='Epoch %d - validation' % e, unit='it', total=len(dataloader)) as pbar:
         with torch.no_grad():
-            for it, (detections, captions) in enumerate(dataloader):
+            for it, (detections, captions, img_ids) in enumerate(dataloader):
                 detections, captions = detections.to(device), captions.to(device)
                 out = model(detections, captions)
                 captions = captions[:, 1:].contiguous()
@@ -42,28 +43,41 @@ def evaluate_loss(model, dataloader, loss_fn, text_field):
     return val_loss
 
 
-def evaluate_metrics(model, dataloader, text_field):
+def evaluate_metrics(model, dataloader, text_field, label):
     import itertools
     model.eval()
-    gen = {}
+    gen, gen_w_ids = {}, {}
     gts = {}
+    image_ids = set()
     with tqdm(desc='Epoch %d - evaluation' % e, unit='it', total=len(dataloader)) as pbar:
-        for it, (images, caps_gt) in enumerate(iter(dataloader)):
+        for it, (images, caps_gt, img_ids) in enumerate(iter(dataloader)):
             images = images.to(device)
             with torch.no_grad():
                 out, _ = model.beam_search(images, 20, text_field.vocab.stoi['<eos>'], 5, out_size=1)
             caps_gen = text_field.decode(out, join_words=False)
             for i, (gts_i, gen_i) in enumerate(zip(caps_gt, caps_gen)):
                 gen_i = ' '.join([k for k, g in itertools.groupby(gen_i)])
+                gen_i_wo_whitespace = ''.join([k for k, g in itertools.groupby(gen_i)])
                 gen['%d_%d' % (it, i)] = [gen_i, ]
                 gts['%d_%d' % (it, i)] = gts_i
+                # if img_ids[i] not in image_ids:
+                gen_w_ids[img_ids[i]] = gen_i_wo_whitespace
+                image_ids.add(img_ids[i])
             pbar.update()
+            if DEBUG and it > 10:
+                break
 
-    gts = evaluation.PTBTokenizer.tokenize(gts)
-    gen = evaluation.PTBTokenizer.tokenize(gen)
-    skey = list(gts.keys())[0]
-    print("hypo:", gen[skey])
-    print("refs:", gts[skey])
+    # gts = evaluation.PTBTokenizer.tokenize(gts)
+    # gen = evaluation.PTBTokenizer.tokenize(gen)
+
+    skey = list(gts.keys())[1]
+    print("hypo:", gen[skey],flush=True)
+    print("refs:", gts[skey],flush=True)
+    with open(f"output_{label}.json","w") as f:
+        results = [{"image_id" : img_id, "caption" : cap} for img_id, cap in gen_w_ids.items()]
+        output = json.dumps(results,indent=4)
+        f.write(output)
+
     scores, _ = evaluation.compute_scores(gts, gen)
     return scores
 
@@ -74,7 +88,7 @@ def train_xe(model, dataloader, optim, text_field):
     scheduler.step()
     running_loss = .0
     with tqdm(desc='Epoch %d - train' % e, unit='it', total=len(dataloader)) as pbar:
-        for it, (detections, captions) in enumerate(dataloader):
+        for it, (detections, captions, img_ids) in enumerate(dataloader):
             detections, captions = detections.to(device), captions.to(device)
             out = model(detections, captions)
             optim.zero_grad()
@@ -108,7 +122,7 @@ def train_scst(model, dataloader, optim, cider, text_field):
     beam_size = 5
 
     with tqdm(desc='Epoch %d - train' % e, unit='it', total=len(dataloader)) as pbar:
-        for it, (detections, caps_gt) in enumerate(dataloader):
+        for it, (detections, caps_gt, img_ids) in enumerate(dataloader):
             detections = detections.to(device)
             outs, log_probs = model.beam_search(detections, seq_len, text_field.vocab.stoi['<eos>'],
                                                 beam_size, out_size=beam_size)
@@ -139,10 +153,17 @@ def train_scst(model, dataloader, optim, cider, text_field):
     reward_baseline = running_reward_baseline / len(dataloader)
     return loss, reward, reward_baseline
 
+def set_UTF8_io():
+    import io, sys
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 if __name__ == '__main__':
+    set_UTF8_io()
+    print("日本語 ... OK",flush=True)
+
     assert torch.cuda.is_available()
-    print("torch:",torch.__version__)
+    print("torch:",torch.__version__,flush=True)
     device = torch.device('cuda')
     # device = torch.device('cpu')
     parser = argparse.ArgumentParser(description='Meshed-Memory Transformer')
@@ -158,9 +179,9 @@ if __name__ == '__main__':
     parser.add_argument('--annotation_folder', type=str)
     parser.add_argument('--logs_folder', type=str, default='tensorboard_logs')
     args = parser.parse_args()
-    print(args)
+    print(args,flush=True)
 
-    print('Meshed-Memory Transformer Training')
+    print('Meshed-Memory Transformer Training',flush=True)
 
 
     # Pipeline for image regions
@@ -175,27 +196,29 @@ if __name__ == '__main__':
     train_dataset, val_dataset, test_dataset = dataset.splits
 
     if not os.path.isfile('vocab_%s.pkl' % args.exp_name):
-        print("Building vocabulary")
+        print("Building vocabulary",flush=True)
         text_field.build_vocab(train_dataset, val_dataset, min_freq=5)
         pickle.dump(text_field.vocab, open('vocab_%s.pkl' % args.exp_name, 'wb'))
-        print("..fin")
+        print("..fin",flush=True)
     else:
         text_field.vocab = pickle.load(open('vocab_%s.pkl' % args.exp_name, 'rb'))
 
     # Model and dataloaders
-    print("Prepare Model ...")
+    print("Prepare Model ...",flush=True)
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory,
                                      attention_module_kwargs={'m': args.m})
     decoder = MeshedDecoder(len(text_field.vocab), 54, 3, text_field.vocab.stoi['<pad>'])
     model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder)
     model = model.to(device)
 
-    print("Prepare dataset ...",flush=True)
+    print("Prepare dataset ... ",flush=True)
     dict_dataset_train = train_dataset.image_dictionary({'image': image_field, 'text': RawField()})
-    ref_caps_train = list(train_dataset.text)
-    cider_train = Cider(PTBTokenizer.tokenize(ref_caps_train))
     dict_dataset_val = val_dataset.image_dictionary({'image': image_field, 'text': RawField()})
     dict_dataset_test = test_dataset.image_dictionary({'image': image_field, 'text': RawField()})
+
+    print("Prepare token ... ",flush=True)
+    ref_caps_train = list(train_dataset.text)
+    cider_train = Cider(PTBTokenizer.tokenize(ref_caps_train))
 
 
     def lambda_lr(s):
@@ -205,7 +228,7 @@ if __name__ == '__main__':
 
 
     # Initial conditions
-    print("Prepare initial conditions ...")
+    print("Prepare initial conditions ...",flush=True)
     optim = Adam(model.parameters(), lr=1, betas=(0.9, 0.98))
     scheduler = LambdaLR(optim, lambda_lr)
     loss_fn = NLLLoss(ignore_index=text_field.vocab.stoi['<pad>'])
@@ -239,7 +262,7 @@ if __name__ == '__main__':
             model.load_state_dict(data['state_dict'], strict=False)
             print('Resuming from epoch %d,  and best cider %f' % (start_epoch, best_cider))
 
-    print("Training starts")
+    print("Training starts",flush=True)
     for e in range(start_epoch, start_epoch + 100):
         dataloader_train = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers,
                                       drop_last=True)
@@ -249,7 +272,7 @@ if __name__ == '__main__':
         dict_dataloader_val = DataLoader(dict_dataset_val, batch_size=args.batch_size // 5)
         dict_dataloader_test = DataLoader(dict_dataset_test, batch_size=args.batch_size // 5)
 
-        if not use_rl:
+        if not use_rl:  
             train_loss = train_xe(model, dataloader_train, optim, text_field)
             # writer.add_scalar('data/train_loss', train_loss, e)
         else:
@@ -259,11 +282,13 @@ if __name__ == '__main__':
             # writer.add_scalar('data/reward_baseline', reward_baseline, e)
 
         # Validation loss
-        val_loss = evaluate_loss(model, dataloader_val, loss_fn, text_field)
+        val_loss = 1e10
+        if not DEBUG:
+            val_loss = evaluate_loss(model, dataloader_val, loss_fn, text_field)
         # writer.add_scalar('data/val_loss', val_loss, e)
 
         # Validation scores
-        scores = evaluate_metrics(model, dict_dataloader_val, text_field)
+        scores = evaluate_metrics(model, dict_dataloader_val, text_field, label="eval")
         print("Validation scores", scores)
         val_cider = scores['CIDEr']
         # writer.add_scalar('data/val_cider', val_cider, e)
@@ -273,7 +298,7 @@ if __name__ == '__main__':
         # writer.add_scalar('data/val_rouge', scores['ROUGE'], e)
 
         # Test scores
-        scores = evaluate_metrics(model, dict_dataloader_test, text_field)
+        scores = evaluate_metrics(model, dict_dataloader_test, text_field, label="test")
         print("Test scores", scores)
         # writer.add_scalar('data/test_cider', scores['CIDEr'], e)
         # writer.add_scalar('data/test_bleu1', scores['BLEU'][0], e)
