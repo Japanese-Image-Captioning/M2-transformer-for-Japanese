@@ -9,6 +9,7 @@ import h5py
 import os
 import warnings
 import shutil
+from tqdm import tqdm
 
 from .dataset import Dataset
 from .vocab import Vocab
@@ -199,7 +200,7 @@ class TextField(RawField):
             else:
                 sources.append(arg)
 
-        for data in sources:
+        for data in tqdm(sources):
             for x in data:
                 x = self.preprocess(x)
                 try:

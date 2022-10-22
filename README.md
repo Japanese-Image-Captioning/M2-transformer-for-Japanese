@@ -18,6 +18,8 @@ Please cite with the following BibTeX:
 ## Environment setup
 Clone the repository and create the `m2release` conda environment using the `environment.yml` file:
 ```
+pyenv install anaconda3-2020.07
+pyenv local anaconda3-2020.07
 conda env create -f environment.yml
 conda activate m2release
 ```
@@ -35,6 +37,7 @@ To run the code, annotations and detection features for the COCO dataset are nee
 
 Detection features are computed with the code provided by [1]. To reproduce our result, please download the COCO features file [coco_detections.hdf5](https://drive.google.com/open?id=1MV6dSnqViQfyvgyHrmAT_lLpFbkzp3mx) (~53.5 GB), in which detections of each image are stored under the `<image_id>_features` key. `<image_id>` is the id of each COCO image, without leading zeros (e.g. the `<image_id>` for `COCO_val2014_000000037209.jpg` is `37209`), and each value should be a `(N, 2048)` tensor, where `N` is the number of detections. 
 
+  - Since this file is large in size, we recommend that you download it according to [this article](https://yuiga.dev/blog/posts/%E5%B7%A8%E5%A4%A7%E3%83%87%E3%83%BC%E3%82%BFgdown%E3%81%AEaccess_denied%E5%95%8F%E9%A1%8C%E3%81%AF%E8%AB%A6%E3%82%81%E3%82%88%E3%81%86/).
 
 ## Evaluation
 To reproduce the results reported in our paper, download the pretrained model file [meshed_memory_transformer.pth](https://drive.google.com/file/d/1naUSnVqXSMIdoiNz_fjqKwh9tXF7x8Nx/view?usp=sharing) and place it in the code folder.

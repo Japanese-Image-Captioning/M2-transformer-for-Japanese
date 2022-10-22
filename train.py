@@ -9,7 +9,6 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn import NLLLoss
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
 import argparse, os, pickle
 import numpy as np
 import itertools
@@ -137,7 +136,10 @@ def train_scst(model, dataloader, optim, cider, text_field):
 
 
 if __name__ == '__main__':
+    assert torch.cuda.is_available()
+    print("torch:",torch.__version__)
     device = torch.device('cuda')
+    # device = torch.device('cpu')
     parser = argparse.ArgumentParser(description='Meshed-Memory Transformer')
     parser.add_argument('--exp_name', type=str, default='m2_transformer')
     parser.add_argument('--batch_size', type=int, default=10)
@@ -155,7 +157,6 @@ if __name__ == '__main__':
 
     print('Meshed-Memory Transformer Training')
 
-    writer = SummaryWriter(log_dir=os.path.join(args.logs_folder, args.exp_name))
 
     # Pipeline for image regions
     image_field = ImageDetectionsField(detections_path=args.features_path, max_detections=50, load_in_tmp=False)
@@ -172,15 +173,22 @@ if __name__ == '__main__':
         print("Building vocabulary")
         text_field.build_vocab(train_dataset, val_dataset, min_freq=5)
         pickle.dump(text_field.vocab, open('vocab_%s.pkl' % args.exp_name, 'wb'))
+        print("..fin")
     else:
         text_field.vocab = pickle.load(open('vocab_%s.pkl' % args.exp_name, 'rb'))
 
     # Model and dataloaders
+    print("Prepare Model ...")
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory,
                                      attention_module_kwargs={'m': args.m})
+    print("a")
     decoder = MeshedDecoder(len(text_field.vocab), 54, 3, text_field.vocab.stoi['<pad>'])
-    model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder).to(device)
+    print("b")
+    model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder)
+    print("c")
+    model = model.to(device)
 
+    print("Prepare dataset ...",flush=True)
     dict_dataset_train = train_dataset.image_dictionary({'image': image_field, 'text': RawField()})
     ref_caps_train = list(train_dataset.text)
     cider_train = Cider(PTBTokenizer.tokenize(ref_caps_train))
@@ -195,6 +203,7 @@ if __name__ == '__main__':
 
 
     # Initial conditions
+    print("Prepare initial conditions ...")
     optim = Adam(model.parameters(), lr=1, betas=(0.9, 0.98))
     scheduler = LambdaLR(optim, lambda_lr)
     loss_fn = NLLLoss(ignore_index=text_field.vocab.stoi['<pad>'])
@@ -237,35 +246,35 @@ if __name__ == '__main__':
 
         if not use_rl:
             train_loss = train_xe(model, dataloader_train, optim, text_field)
-            writer.add_scalar('data/train_loss', train_loss, e)
+            # writer.add_scalar('data/train_loss', train_loss, e)
         else:
             train_loss, reward, reward_baseline = train_scst(model, dict_dataloader_train, optim, cider_train, text_field)
-            writer.add_scalar('data/train_loss', train_loss, e)
-            writer.add_scalar('data/reward', reward, e)
-            writer.add_scalar('data/reward_baseline', reward_baseline, e)
+            # writer.add_scalar('data/train_loss', train_loss, e)
+            # writer.add_scalar('data/reward', reward, e)
+            # writer.add_scalar('data/reward_baseline', reward_baseline, e)
 
         # Validation loss
         val_loss = evaluate_loss(model, dataloader_val, loss_fn, text_field)
-        writer.add_scalar('data/val_loss', val_loss, e)
+        # writer.add_scalar('data/val_loss', val_loss, e)
 
         # Validation scores
         scores = evaluate_metrics(model, dict_dataloader_val, text_field)
         print("Validation scores", scores)
         val_cider = scores['CIDEr']
-        writer.add_scalar('data/val_cider', val_cider, e)
-        writer.add_scalar('data/val_bleu1', scores['BLEU'][0], e)
-        writer.add_scalar('data/val_bleu4', scores['BLEU'][3], e)
-        writer.add_scalar('data/val_meteor', scores['METEOR'], e)
-        writer.add_scalar('data/val_rouge', scores['ROUGE'], e)
+        # writer.add_scalar('data/val_cider', val_cider, e)
+        # writer.add_scalar('data/val_bleu1', scores['BLEU'][0], e)
+        # writer.add_scalar('data/val_bleu4', scores['BLEU'][3], e)
+        # writer.add_scalar('data/val_meteor', scores['METEOR'], e)
+        # writer.add_scalar('data/val_rouge', scores['ROUGE'], e)
 
         # Test scores
         scores = evaluate_metrics(model, dict_dataloader_test, text_field)
         print("Test scores", scores)
-        writer.add_scalar('data/test_cider', scores['CIDEr'], e)
-        writer.add_scalar('data/test_bleu1', scores['BLEU'][0], e)
-        writer.add_scalar('data/test_bleu4', scores['BLEU'][3], e)
-        writer.add_scalar('data/test_meteor', scores['METEOR'], e)
-        writer.add_scalar('data/test_rouge', scores['ROUGE'], e)
+        # writer.add_scalar('data/test_cider', scores['CIDEr'], e)
+        # writer.add_scalar('data/test_bleu1', scores['BLEU'][0], e)
+        # writer.add_scalar('data/test_bleu4', scores['BLEU'][3], e)
+        # writer.add_scalar('data/test_meteor', scores['METEOR'], e)
+        # writer.add_scalar('data/test_rouge', scores['ROUGE'], e)
 
         # Prepare for next epoch
         best = False
@@ -319,5 +328,5 @@ if __name__ == '__main__':
             copyfile('saved_models/%s_last.pth' % args.exp_name, 'saved_models/%s_best.pth' % args.exp_name)
 
         if exit_train:
-            writer.close()
+            # writer.close()
             break
