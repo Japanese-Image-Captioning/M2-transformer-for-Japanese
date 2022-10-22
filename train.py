@@ -19,7 +19,7 @@ random.seed(1234)
 torch.manual_seed(1234)
 np.random.seed(1234)
 
-
+DEBUG = False
 def evaluate_loss(model, dataloader, loss_fn, text_field):
     # Validation loss
     model.eval()
@@ -61,6 +61,9 @@ def evaluate_metrics(model, dataloader, text_field):
 
     gts = evaluation.PTBTokenizer.tokenize(gts)
     gen = evaluation.PTBTokenizer.tokenize(gen)
+    skey = list(gts.keys())[0]
+    print("hypo:", gen[skey])
+    print("refs:", gts[skey])
     scores, _ = evaluation.compute_scores(gts, gen)
     return scores
 
@@ -87,6 +90,8 @@ def train_xe(model, dataloader, optim, text_field):
             pbar.set_postfix(loss=running_loss / (it + 1))
             pbar.update()
             scheduler.step()
+            if DEBUG and it > 5:
+                break
 
     loss = running_loss / len(dataloader)
     return loss
@@ -181,11 +186,8 @@ if __name__ == '__main__':
     print("Prepare Model ...")
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory,
                                      attention_module_kwargs={'m': args.m})
-    print("a")
     decoder = MeshedDecoder(len(text_field.vocab), 54, 3, text_field.vocab.stoi['<pad>'])
-    print("b")
     model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder)
-    print("c")
     model = model.to(device)
 
     print("Prepare dataset ...",flush=True)
@@ -220,19 +222,22 @@ if __name__ == '__main__':
 
         if os.path.exists(fname):
             data = torch.load(fname)
-            torch.set_rng_state(data['torch_rng_state'])
-            torch.cuda.set_rng_state(data['cuda_rng_state'])
-            np.random.set_state(data['numpy_rng_state'])
-            random.setstate(data['random_rng_state'])
+            def __safe_inject(x,lam):
+                if x not in data:
+                    return
+                lam(data[x])
+            __safe_inject("torch_rng_state",torch.set_rng_state)
+            __safe_inject("cuda_rng_state",torch.cuda.set_rng_state)
+            __safe_inject("numpy_rng_state",np.random.set_state)
+            __safe_inject("random_rng_state",random.setstate)
+            __safe_inject("optimizer",optim.load_state_dict)
+            __safe_inject("scheduler",scheduler.load_state_dict)
+            __safe_inject("epoch",lambda x: print(start_epoch = x))
+            __safe_inject("best_cider",lambda x: print(best_cider = x))
+            __safe_inject("patience",lambda x: print(patience = x))
+            __safe_inject("use_rl",lambda x: print(use_rl = x))
             model.load_state_dict(data['state_dict'], strict=False)
-            optim.load_state_dict(data['optimizer'])
-            scheduler.load_state_dict(data['scheduler'])
-            start_epoch = data['epoch'] + 1
-            best_cider = data['best_cider']
-            patience = data['patience']
-            use_rl = data['use_rl']
-            print('Resuming from epoch %d, validation loss %f, and best cider %f' % (
-                data['epoch'], data['val_loss'], data['best_cider']))
+            print('Resuming from epoch %d,  and best cider %f' % (start_epoch, best_cider))
 
     print("Training starts")
     for e in range(start_epoch, start_epoch + 100):
