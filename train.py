@@ -207,7 +207,7 @@ if __name__ == '__main__':
     print("Prepare Model ...",flush=True)
     encoder = MemoryAugmentedEncoder(3, 0, attention_module=ScaledDotProductAttentionMemory,
                                      attention_module_kwargs={'m': args.m})
-    decoder = MeshedDecoder(len(text_field.vocab), 54, 3, text_field.vocab.stoi['<pad>'])
+    decoder = MeshedDecoder(len(text_field.vocab), 100 - 1, 3, text_field.vocab.stoi['<pad>']) # check https://yuiga.dev/blog/posts/pytorchcuda_error_device-side_assert_triggered_%E8%A7%A3%E6%B1%BA%E3%81%AE%E6%89%8B%E5%BC%95%E3%81%8D/
     model = Transformer(text_field.vocab.stoi['<bos>'], encoder, decoder)
     model = model.to(device)
 
