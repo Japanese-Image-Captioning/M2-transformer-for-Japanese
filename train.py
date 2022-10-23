@@ -61,7 +61,7 @@ def evaluate_metrics(model, dataloader, text_field, label):
                 gen['%d_%d' % (it, i)] = [gen_i, ]
                 gts['%d_%d' % (it, i)] = gts_i
                 # if img_ids[i] not in image_ids:
-                gen_w_ids[img_ids[i]] = gen_i_wo_whitespace
+                gen_w_ids[img_ids[i]] = gen_i_wo_whitespace.replace(" ","")
                 image_ids.add(img_ids[i])
             pbar.update()
             if DEBUG and it > 10:
@@ -245,21 +245,28 @@ if __name__ == '__main__':
 
         if os.path.exists(fname):
             data = torch.load(fname)
-            def __safe_inject(x,lam):
-                if x not in data:
+            def __safe_inject(key,lam):
+                if key not in data:
                     return
-                lam(data[x])
+                lam(data[key])
+                return data[key]
+
+            def __safe_return(key,x):
+                return data[key] if key in data else x
+
             __safe_inject("torch_rng_state",torch.set_rng_state)
             __safe_inject("cuda_rng_state",torch.cuda.set_rng_state)
             __safe_inject("numpy_rng_state",np.random.set_state)
             __safe_inject("random_rng_state",random.setstate)
             __safe_inject("optimizer",optim.load_state_dict)
             __safe_inject("scheduler",scheduler.load_state_dict)
-            __safe_inject("epoch",lambda x: print(start_epoch = x))
-            __safe_inject("best_cider",lambda x: print(best_cider = x))
-            __safe_inject("patience",lambda x: print(patience = x))
-            __safe_inject("use_rl",lambda x: print(use_rl = x))
-            model.load_state_dict(data['state_dict'], strict=False)
+
+            start_epoch = __safe_return("epoch",start_epoch)
+            best_cider = __safe_return("best_cider",best_cider)
+            patience = __safe_return("patience",patience)
+            use_rl = __safe_return("use_rl",use_rl)
+
+            model.load_state_dict(data['state_dict'], strict=True)
             print('Resuming from epoch %d,  and best cider %f' % (start_epoch, best_cider))
 
     print("Training starts",flush=True)
