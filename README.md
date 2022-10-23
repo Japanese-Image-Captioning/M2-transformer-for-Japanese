@@ -24,6 +24,8 @@ conda env create -f environment.yml
 conda activate m2release
 ```
 
+- If you are using tmux and get an error from miniconda, run `source $HOME/.pyenv/versions/anaconda3-2020.07/etc/profile.d/conda.sh` and then `conda activate m2release`.
+
 Then download spacy data by executing the following command:
 ```
 python -m spacy download en
