@@ -47,7 +47,7 @@ def evaluate_metrics(model, dataloader, text_field, label):
     import itertools
     model.eval()
     gen, gen_w_ids = {}, {}
-    gts = {}
+    gts, gts_w_ids = {}, {}
     image_ids = set()
     with tqdm(desc='Epoch %d - evaluation' % e, unit='it', total=len(dataloader)) as pbar:
         for it, (images, caps_gt, img_ids) in enumerate(iter(dataloader)):
@@ -62,6 +62,7 @@ def evaluate_metrics(model, dataloader, text_field, label):
                 gts['%d_%d' % (it, i)] = gts_i
                 # if img_ids[i] not in image_ids:
                 gen_w_ids[img_ids[i]] = gen_i_wo_whitespace.replace(" ","")
+                gts_w_ids[img_ids[i]] = list(map(lambda x: x.replace(" ",""), gts_i))
                 image_ids.add(img_ids[i])
             pbar.update()
             if DEBUG and it > 10:
@@ -74,7 +75,7 @@ def evaluate_metrics(model, dataloader, text_field, label):
     print("hypo:", gen[skey],flush=True)
     print("refs:", gts[skey],flush=True)
     with open(f"output_{label}.json","w") as f:
-        results = [{"image_id" : img_id, "caption" : cap} for img_id, cap in gen_w_ids.items()]
+        results = [{"image_id" : img_id, "caption" : cap, "gt": gts_w_ids[img_id]} for img_id, cap in gen_w_ids.items()]
         output = json.dumps(results,indent=4)
         f.write(output)
 
@@ -268,6 +269,9 @@ if __name__ == '__main__':
 
             model.load_state_dict(data['state_dict'], strict=True)
             print('Resuming from epoch %d,  and best cider %f' % (start_epoch, best_cider))
+
+    if DEBUG:
+        use_rl = False
 
     print("Training starts",flush=True)
     for e in range(start_epoch, start_epoch + 100):

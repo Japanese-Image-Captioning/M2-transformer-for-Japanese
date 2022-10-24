@@ -109,19 +109,23 @@ class DictionaryDataset(Dataset):
         key_examples = []
         key_dict = dict()
         value_examples = []
+        img_ids = []
 
         for i, e in enumerate(tqdm(examples)):
             key_example = Example.fromdict({k: getattr(e, k) for k in key_fields})
             value_example = Example.fromdict({v: getattr(e, v) for v in value_fields})
+            img_id = getattr(e,"image_id")
             if key_example not in key_dict:
                 key_dict[key_example] = len(key_examples)
                 key_examples.append(key_example)
+                img_ids.append(img_id)
 
             value_examples.append(value_example)
             dictionary[key_dict[key_example]].append(i)
 
         self.key_dataset = Dataset(key_examples, key_fields)
         self.value_dataset = ValueDataset(value_examples, value_fields, dictionary)
+        self.img_ids = img_ids
         super(DictionaryDataset, self).__init__(examples, fields)
 
     def collate_fn(self):
@@ -133,7 +137,7 @@ class DictionaryDataset(Dataset):
         return collate
 
     def __getitem__(self, i):
-        img_id = getattr(self.examples[i],"image_id")
+        img_id = self.img_ids[i]
         return self.key_dataset[i], self.value_dataset[i], img_id
 
     def __len__(self):
